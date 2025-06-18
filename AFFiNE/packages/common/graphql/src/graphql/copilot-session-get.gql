@@ -1,0 +1,16 @@
+query getCopilotSession(
+  $workspaceId: String!
+  $sessionId: String!
+) {
+  currentUser {
+    copilot(workspaceId: $workspaceId) {
+      session(sessionId: $sessionId) {
+        id
+        parentSessionId
+        promptName
+        model
+        optionalModels
+      }
+    }
+  }
+}

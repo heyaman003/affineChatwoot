@@ -1,0 +1,20 @@
+{
+  "tata-communication": {
+    "logo": "http://localhost:4000/uploads/1749747034406-avt-001.png",
+    "primaryColor": "#123aaf",
+    "chatwootInboxKey": "randomhashpwd00202",
+    "chatwootBaseUrl": "http://localhost:3000/"
+  },
+  "Pitti": {
+    "logo": "http://localhost:4000/uploads/1749747078513-avt-002.jpg",
+    "primaryColor": "#353536",
+    "chatwootInboxKey": "hahjsjiwndwnwdnlhdw",
+    "chatwootBaseUrl": "http://localhost:3000/"
+  },
+  "Teenat-003": {
+    "logo": "http://localhost:4000/uploads/1749747620757-avt-003.webp",
+    "primaryColor": "#e52a2a",
+    "chatwootInboxKey": "hshshhsbnwdbkdwbn",
+    "chatwootBaseUrl": "http://localhost:3000"
+  }
+}
