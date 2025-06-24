@@ -1,7 +1,0 @@
-#import './license.gql'
-
-mutation installLicense($workspaceId: String!, $license: Upload!) {
-  installLicense(workspaceId: $workspaceId, license: $license) {
-    ...license
-  }
-}
