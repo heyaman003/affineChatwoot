@@ -1,0 +1,12 @@
+name: Setup Version
+description: 'Setup Version'
+inputs:
+  app-version:
+    description: 'App Version'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Write Version'
+      shell: bash
+      run: ./scripts/set-version.sh ${{ inputs.app-version }}

@@ -2,50 +2,14 @@ version: "3.8"
 
 services:
   affine:
-    image: custom-affine-web:latest   # Use custom image
-    container_name: affine_server
+    build: 
+      context: ./AFFiNE
+      dockerfile: Dockerfile
     ports:
-      - '${PORT:-3010}:3010'
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      affine_migration:
-        condition: service_completed_successfully
-    volumes:
-      # custom configurations
-     - ./data/storage:/root/.affine/storage
-      - ${CONFIG_LOCATION}:/root/.affine/config
-    env_file:
-      - .env
+      - '127.0.0.1:8080:8080'
+    restart: always
     environment:
-      - AFFINE_CONFIG_PATH=/root/.affine/config
-      - REDIS_SERVER_HOST=redis
-      - DATABASE_URL=postgresql://${DB_USERNAME}:${DB_PASSWORD}@postgres:5432/${DB_DATABASE:-affine}
-      - AFFINE_INDEXER_ENABLED=false
-    restart: unless-stopped
-
-  affine_migration:
-    image: ghcr.io/toeverything/affine-graphql:${AFFINE_REVISION:-stable}
-    container_name: affine_migration_job
-    volumes:
-      # custom configurations
-      - ${UPLOAD_LOCATION}:/root/.affine/storage
-      - ${CONFIG_LOCATION}:/root/.affine/config
-    command: ['sh', '-c', 'node ./scripts/self-host-predeploy.js']
-    env_file:
-      - .env
-    environment:
-      - REDIS_SERVER_HOST=redis
-      - DATABASE_URL=postgresql://${DB_USERNAME}:${DB_PASSWORD}@postgres:5432/${DB_DATABASE:-affine}
-      - AFFINE_INDEXER_ENABLED=false
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
+      - NODE_ENV=development
   redis:
     image: redis
     container_name: affine_redis
