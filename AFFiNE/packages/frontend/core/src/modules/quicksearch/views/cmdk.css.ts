@@ -1,5 +1,4 @@
 import { cssVar } from '@toeverything/theme';
-import { cssVarV2 } from '@toeverything/theme/v2';
 import { globalStyle, style } from '@vanilla-extract/css';
 
 export const root = style({});
@@ -195,10 +194,4 @@ export const itemSubtitle = style({
   lineHeight: '20px',
   fontWeight: 400,
   textAlign: 'justify',
-});
-
-export const errorMessage = style({
-  padding: '0px 8px 8px',
-  fontSize: cssVar('fontXs'),
-  color: cssVarV2('status/error'),
 });

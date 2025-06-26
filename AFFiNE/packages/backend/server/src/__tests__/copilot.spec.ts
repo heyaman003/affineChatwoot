@@ -347,7 +347,7 @@ test('should be able to update chat session prompt', async t => {
   t.truthy(sessionId, 'should create session');
 
   // Update the session
-  const updatedSessionId = await session.update({
+  const updatedSessionId = await session.updateSession({
     sessionId,
     promptName: 'Search With AFFiNE AI',
     userId,

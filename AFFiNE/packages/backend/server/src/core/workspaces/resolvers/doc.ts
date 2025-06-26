@@ -304,13 +304,11 @@ export class WorkspaceDocResolver {
 
     await this.tryFixDocOwner(workspace.id, docId);
 
-    const isPublic = await this.models.doc.isPublic(workspace.id, docId);
-
     return {
       docId,
       workspaceId: workspace.id,
       mode: PublicDocMode.Page,
-      public: isPublic,
+      public: false,
       defaultRole: DocRole.Manager,
     };
   }

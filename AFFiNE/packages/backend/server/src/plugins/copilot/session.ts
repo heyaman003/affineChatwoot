@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { Injectable, Logger } from '@nestjs/common';
 import { Transactional } from '@nestjs-cls/transactional';
-import { AiPromptRole } from '@prisma/client';
+import { AiPromptRole, PrismaClient } from '@prisma/client';
 
 import {
   CopilotActionTaken,
@@ -14,11 +14,10 @@ import {
 } from '../../base';
 import { QuotaService } from '../../core/quota';
 import {
-  CleanupSessionOptions,
   ListSessionOptions,
   Models,
   type UpdateChatSession,
-  UpdateChatSessionOptions,
+  UpdateChatSessionData,
 } from '../../models';
 import { ChatMessageCache } from './message';
 import { PromptService } from './prompt';
@@ -30,6 +29,7 @@ import {
   type ChatSessionForkOptions,
   type ChatSessionOptions,
   type ChatSessionState,
+  getTokenEncoder,
   type SubmittedMessage,
 } from './types';
 
@@ -224,11 +224,45 @@ export class ChatSessionService {
   private readonly logger = new Logger(ChatSessionService.name);
 
   constructor(
+    private readonly db: PrismaClient,
     private readonly quota: QuotaService,
     private readonly messageCache: ChatMessageCache,
     private readonly prompt: PromptService,
     private readonly models: Models
   ) {}
+
+  @Transactional()
+  private async setSession(state: ChatSessionState): Promise<string> {
+    const session = this.models.copilotSession;
+    let sessionId = state.sessionId;
+
+    // find existing session if session is chat session
+    if (!state.prompt.action) {
+      const id = await session.getChatSessionId(state);
+      if (id) sessionId = id;
+    }
+
+    const haveSession = await session.has(sessionId, state.userId);
+    if (haveSession) {
+      // message will only exists when setSession call by session.save
+      if (state.messages.length) {
+        await session.setMessages(
+          sessionId,
+          state.messages,
+          this.calculateTokenSize(state.messages, state.prompt.model)
+        );
+      }
+    } else {
+      await session.create({
+        ...state,
+        sessionId,
+        promptName: state.prompt.name,
+        promptAction: state.prompt.action ?? null,
+      });
+    }
+
+    return sessionId;
+  }
 
   async getSession(sessionId: string): Promise<ChatSessionState | undefined> {
     const session = await this.models.copilotSession.get(sessionId);
@@ -260,6 +294,23 @@ export class ChatSessionService {
       sessionId,
       removeLatestUserMessage
     );
+  }
+
+  private calculateTokenSize(messages: PromptMessage[], model: string): number {
+    const encoder = getTokenEncoder(model);
+    return messages
+      .map(m => encoder?.count(m.content) ?? 0)
+      .reduce((total, length) => total + length, 0);
+  }
+
+  private async countUserMessages(userId: string): Promise<number> {
+    const sessions = await this.db.aiSession.findMany({
+      where: { userId },
+      select: { messageCost: true, prompt: { select: { action: true } } },
+    });
+    return sessions
+      .map(({ messageCost, prompt: { action } }) => (action ? 1 : messageCost))
+      .reduce((prev, cost) => prev + cost, 0);
   }
 
   async listSessions(
@@ -298,16 +349,13 @@ export class ChatSessionService {
     const histories = await Promise.all(
       sessions.map(
         async ({
-          userId: uid,
           id,
-          workspaceId,
-          docId,
+          userId: uid,
           pinned,
           promptName,
           tokenCost,
           messages,
           createdAt,
-          updatedAt,
         }) => {
           try {
             const prompt = await this.prompt.get(promptName);
@@ -344,13 +392,10 @@ export class ChatSessionService {
 
               return {
                 sessionId: id,
-                workspaceId,
-                docId,
                 pinned,
                 action: prompt.action || null,
                 tokens: tokenCost,
                 createdAt,
-                updatedAt,
                 messages: preload.concat(ret.data).map(m => ({
                   ...m,
                   attachments: m.attachments
@@ -386,7 +431,7 @@ export class ChatSessionService {
       limit = quota.copilotActionLimit;
     }
 
-    const used = await this.models.copilotSession.countUserMessages(userId);
+    const used = await this.countUserMessages(userId);
 
     return { limit, used };
   }
@@ -411,19 +456,20 @@ export class ChatSessionService {
     }
 
     // validate prompt compatibility with session type
-    this.models.copilotSession.checkSessionPrompt(options, prompt);
-
-    return await this.models.copilotSession.createWithPrompt(
-      {
-        ...options,
-        sessionId,
-        prompt,
-        messages: [],
-        // when client create chat session, we always find root session
-        parentSessionId: null,
-      },
-      true
+    this.models.copilotSession.checkSessionPrompt(
+      options,
+      prompt.name,
+      prompt.action
     );
+
+    return await this.setSession({
+      ...options,
+      sessionId,
+      prompt,
+      messages: [],
+      // when client create chat session, we always find root session
+      parentSessionId: null,
+    });
   }
 
   @Transactional()
@@ -432,16 +478,13 @@ export class ChatSessionService {
   }
 
   @Transactional()
-  async update(options: UpdateChatSession): Promise<string> {
+  async updateSession(options: UpdateChatSession): Promise<string> {
     const session = await this.getSession(options.sessionId);
     if (!session) {
       throw new CopilotSessionNotFound();
     }
 
-    const finalData: UpdateChatSessionOptions = {
-      userId: options.userId,
-      sessionId: options.sessionId,
-    };
+    const finalData: UpdateChatSessionData = {};
     if (options.promptName) {
       const prompt = await this.prompt.get(options.promptName);
       if (!prompt) {
@@ -449,7 +492,11 @@ export class ChatSessionService {
         throw new CopilotPromptNotFound({ name: options.promptName });
       }
 
-      this.models.copilotSession.checkSessionPrompt(session, prompt);
+      this.models.copilotSession.checkSessionPrompt(
+        session,
+        prompt.name,
+        prompt.action
+      );
       finalData.promptName = prompt.name;
     }
     finalData.pinned = options.pinned;
@@ -461,14 +508,20 @@ export class ChatSessionService {
       );
     }
 
-    return await this.models.copilotSession.update(finalData);
+    return await this.models.copilotSession.update(
+      options.userId,
+      options.sessionId,
+      finalData
+    );
   }
 
-  @Transactional()
   async fork(options: ChatSessionForkOptions): Promise<string> {
     const state = await this.getSession(options.sessionId);
     if (!state) {
       throw new CopilotSessionNotFound();
+    }
+    if (state.pinned) {
+      await this.unpin(options.workspaceId, options.userId);
     }
 
     let messages = state.messages.map(m => ({ ...m, id: undefined }));
@@ -485,17 +538,62 @@ export class ChatSessionService {
       messages = messages.slice(0, lastMessageIdx + 1);
     }
 
-    return await this.models.copilotSession.fork({
+    const forkedState = {
       ...state,
       userId: options.userId,
       sessionId: randomUUID(),
+      messages: [],
       parentSessionId: options.sessionId,
-      messages,
-    });
+    };
+    // create session
+    await this.setSession(forkedState);
+    // save message
+    return await this.setSession({ ...forkedState, messages });
   }
 
-  async cleanup(options: CleanupSessionOptions) {
-    return await this.models.copilotSession.cleanup(options);
+  async cleanup(
+    options: Omit<ChatSessionOptions, 'pinned' | 'promptName'> & {
+      sessionIds: string[];
+    }
+  ) {
+    return await this.db.$transaction(async tx => {
+      const sessions = await tx.aiSession.findMany({
+        where: {
+          id: { in: options.sessionIds },
+          userId: options.userId,
+          workspaceId: options.workspaceId,
+          docId: options.docId,
+          deletedAt: null,
+        },
+        select: { id: true, promptName: true },
+      });
+      const sessionIds = sessions.map(({ id }) => id);
+      // cleanup all messages
+      await tx.aiSessionMessage.deleteMany({
+        where: { sessionId: { in: sessionIds } },
+      });
+
+      // only mark action session as deleted
+      // chat session always can be reuse
+      const actionIds = (
+        await Promise.all(
+          sessions.map(({ id, promptName }) =>
+            this.prompt
+              .get(promptName)
+              .then(prompt => ({ id, action: !!prompt?.action }))
+          )
+        )
+      )
+        .filter(({ action }) => action)
+        .map(({ id }) => id);
+
+      await tx.aiSession.updateMany({
+        where: { id: { in: actionIds } },
+        data: { pinned: false, deletedAt: new Date() },
+      });
+
+      return [...sessionIds, ...actionIds];
+    });
   }
 
   async createMessage(message: SubmittedMessage): Promise<string> {
@@ -519,7 +617,7 @@ export class ChatSessionService {
     const state = await this.getSession(sessionId);
     if (state) {
       return new ChatSession(this.messageCache, state, async state => {
-        await this.models.copilotSession.updateMessages(state);
+        await this.setSession(state);
       });
     }
     return null;

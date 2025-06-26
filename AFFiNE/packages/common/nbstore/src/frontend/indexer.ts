@@ -1,13 +1,20 @@
+import { switchMap } from 'rxjs';
+
 import type {
   AggregateOptions,
   IndexerSchema,
+  IndexerStorage,
   Query,
   SearchOptions,
 } from '../storage';
-import type { IndexerPreferOptions, IndexerSync } from '../sync/indexer';
+import type { IndexerSync } from '../sync/indexer';
+import { fromPromise } from '../utils/from-promise';
 
 export class IndexerFrontend {
-  constructor(public readonly sync: IndexerSync) {}
+  constructor(
+    public readonly storage: IndexerStorage,
+    public readonly sync: IndexerSync
+  ) {}
 
   get state$() {
     return this.sync.state$;
@@ -20,45 +27,45 @@ export class IndexerFrontend {
   async search<T extends keyof IndexerSchema, const O extends SearchOptions<T>>(
     table: T,
     query: Query<T>,
-    options?: O & { prefer?: IndexerPreferOptions }
+    options?: O
   ) {
-    return this.sync.search(table, query, options);
+    await this.waitForConnected();
+    return this.storage.search(table, query, options);
   }
 
   async aggregate<
     T extends keyof IndexerSchema,
     const O extends AggregateOptions<T>,
-  >(
-    table: T,
-    query: Query<T>,
-    field: keyof IndexerSchema[T],
-    options?: O & { prefer?: IndexerPreferOptions }
-  ) {
-    return this.sync.aggregate(table, query, field, options);
+  >(table: T, query: Query<T>, field: keyof IndexerSchema[T], options?: O) {
+    await this.waitForConnected();
+    return this.storage.aggregate(table, query, field, options);
   }
 
   search$<T extends keyof IndexerSchema, const O extends SearchOptions<T>>(
     table: T,
     query: Query<T>,
-    options?: O & { prefer?: IndexerPreferOptions }
+    options?: O
   ) {
-    return this.sync.search$(table, query, options);
+    return fromPromise(signal => this.waitForConnected(signal)).pipe(
+      switchMap(() => this.storage.search$(table, query, options))
+    );
   }
 
   aggregate$<
     T extends keyof IndexerSchema,
     const O extends AggregateOptions<T>,
-  >(
-    table: T,
-    query: Query<T>,
-    field: keyof IndexerSchema[T],
-    options?: O & { prefer?: IndexerPreferOptions }
-  ) {
-    return this.sync.aggregate$(table, query, field, options);
+  >(table: T, query: Query<T>, field: keyof IndexerSchema[T], options?: O) {
+    return fromPromise(signal => this.waitForConnected(signal)).pipe(
+      switchMap(() => this.storage.aggregate$(table, query, field, options))
+    );
   }
 
   addPriority(docId: string, priority: number) {
     return this.sync.addPriority(docId, priority);
+  }
+
+  private waitForConnected(signal?: AbortSignal) {
+    return this.storage.connection.waitForConnected(signal);
   }
 
   waitForCompleted(signal?: AbortSignal) {

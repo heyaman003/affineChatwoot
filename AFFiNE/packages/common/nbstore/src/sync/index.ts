@@ -9,11 +9,7 @@ import type { PeerStorageOptions } from './types';
 
 export type { BlobSyncState } from './blob';
 export type { DocSyncDocState, DocSyncState } from './doc';
-export type {
-  IndexerDocSyncState,
-  IndexerPreferOptions,
-  IndexerSyncState,
-} from './indexer';
+export type { IndexerDocSyncState, IndexerSyncState } from './indexer';
 
 export interface SyncState {
   doc?: DocSyncState;
@@ -69,19 +65,7 @@ export class Sync {
         ])
       ),
     });
-    this.indexer = new IndexerSyncImpl(
-      doc,
-      {
-        local: indexer,
-        remotes: Object.fromEntries(
-          Object.entries(storages.remotes).map(([peerId, remote]) => [
-            peerId,
-            remote.get('indexer'),
-          ])
-        ),
-      },
-      indexerSync
-    );
+    this.indexer = new IndexerSyncImpl(doc, indexer, indexerSync);
 
     this.state$ = this.doc.state$.pipe(map(doc => ({ doc })));
   }

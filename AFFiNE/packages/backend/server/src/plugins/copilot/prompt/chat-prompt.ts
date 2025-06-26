@@ -3,8 +3,8 @@ import { Logger } from '@nestjs/common';
 import { AiPrompt } from '@prisma/client';
 import Mustache from 'mustache';
 
-import { getTokenEncoder } from '../../../native';
 import { PromptConfig, PromptMessage, PromptParams } from '../providers';
+import { getTokenEncoder } from '../types';
 
 // disable escaping
 Mustache.escape = (text: string) => text;
@@ -56,7 +56,8 @@ export class ChatPrompt {
     private readonly messages: PromptMessage[]
   ) {
     this.encoder = getTokenEncoder(model);
-    this.promptTokenSize = this.encode(messages.map(m => m.content).join(''));
+    this.promptTokenSize =
+      this.encoder?.count(messages.map(m => m.content).join('') || '') || 0;
     this.templateParamKeys = extractMustacheParams(
       messages.map(m => m.content).join('')
     );

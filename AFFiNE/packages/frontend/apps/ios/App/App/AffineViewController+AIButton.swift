@@ -13,21 +13,10 @@ extension AFFiNEViewController: IntelligentsButtonDelegate {
     IntelligentContext.shared.webView = webView!
     button.beginProgress()
     
-    IntelligentContext.shared.preparePresent() { result in
+    IntelligentContext.shared.preparePresent() { _ in
       button.stopProgress()
-      switch result {
-      case .success(let success):
-        let controller = IntelligentsController()
-        self.present(controller, animated: true)
-      case .failure(let failure):
-        let alert = UIAlertController(
-          title: "Error",
-          message: failure.localizedDescription,
-          preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        self.present(alert, animated: true)
-      }
+      let controller = IntelligentsController()
+      self.present(controller, animated: true)
     }
   }
 }

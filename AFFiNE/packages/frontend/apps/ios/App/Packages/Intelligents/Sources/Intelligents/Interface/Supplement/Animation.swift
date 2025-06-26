@@ -8,12 +8,11 @@
 import UIKit
 
 func performWithAnimation(
-  duration: TimeInterval = 0.5,
   animations: @escaping () -> Void,
   completion: @escaping (Bool) -> Void = { _ in }
 ) {
   UIView.animate(
-    withDuration: duration,
+    withDuration: 0.5,
     delay: 0,
     usingSpringWithDamping: 0.8,
     initialSpringVelocity: 0.8,

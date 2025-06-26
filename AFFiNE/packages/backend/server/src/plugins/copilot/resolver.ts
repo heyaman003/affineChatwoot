@@ -39,11 +39,14 @@ import { PromptMessage, StreamObject } from './providers';
 import { ChatSessionService } from './session';
 import { CopilotStorage } from './storage';
 import {
+  AvailableModels,
   type ChatHistory,
   type ChatMessage,
   type ChatSessionState,
   SubmittedMessage,
 } from './types';
+
+registerEnumType(AvailableModels, { name: 'CopilotModel' });
 
 export const COPILOT_LOCKER = 'copilot';
 
@@ -235,12 +238,6 @@ class CopilotHistoriesType implements Partial<ChatHistory> {
   @Field(() => String)
   sessionId!: string;
 
-  @Field(() => String)
-  workspaceId!: string;
-
-  @Field(() => String, { nullable: true })
-  docId!: string | null;
-
   @Field(() => Boolean)
   pinned!: boolean;
 
@@ -260,9 +257,6 @@ class CopilotHistoriesType implements Partial<ChatHistory> {
 
   @Field(() => Date)
   createdAt!: Date;
-
-  @Field(() => Date)
-  updatedAt!: Date;
 }
 
 @ObjectType('CopilotQuota')
@@ -306,6 +300,8 @@ class CopilotPromptMessageType {
   @Field(() => GraphQLJSON, { nullable: true })
   params!: Record<string, string> | null;
 }
+
+registerEnumType(AvailableModels, { name: 'CopilotModels' });
 
 @ObjectType()
 class CopilotPromptType {
@@ -376,30 +372,6 @@ export class CopilotResolver {
     return await this.chatSession.getQuota(user.id);
   }
 
-  private async assertPermission(
-    user: CurrentUser,
-    options: { workspaceId?: string | null; docId?: string | null }
-  ) {
-    const { workspaceId, docId } = options;
-    if (!workspaceId) {
-      throw new NotFoundException('Workspace not found');
-    }
-    if (docId) {
-      await this.ac
-        .user(user.id)
-        .doc({ workspaceId, docId })
-        .allowLocal()
-        .assert('Doc.Update');
-    } else {
-      await this.ac
-        .user(user.id)
-        .workspace(workspaceId)
-        .allowLocal()
-        .assert('Workspace.Copilot');
-    }
-    return { userId: user.id, workspaceId, docId: docId || undefined };
-  }
-
   @ResolveField(() => CopilotSessionType, {
     description: 'Get the session by id',
     complexity: 2,
@@ -409,7 +381,14 @@ export class CopilotResolver {
     @CurrentUser() user: CurrentUser,
     @Args('sessionId') sessionId: string
   ): Promise<CopilotSessionType> {
-    await this.assertPermission(user, copilot);
+    if (!copilot.workspaceId) {
+      throw new NotFoundException('Workspace not found');
+    }
+    await this.ac
+      .user(user.id)
+      .workspace(copilot.workspaceId)
+      .allowLocal()
+      .assert('Workspace.Copilot');
     const session = await this.chatSession.getSession(sessionId);
     if (!session) {
       throw new NotFoundException('Session not found');
@@ -424,32 +403,27 @@ export class CopilotResolver {
   async sessions(
     @Parent() copilot: CopilotType,
     @CurrentUser() user: CurrentUser,
-    @Args('docId', { nullable: true }) maybeDocId?: string,
+    @Args('docId', { nullable: true }) docId?: string,
     @Args('options', { nullable: true }) options?: QueryChatSessionsInput
   ): Promise<CopilotSessionType[]> {
     if (!copilot.workspaceId) {
-      return [];
+      throw new NotFoundException('Workspace not found');
     }
-
-    const appendOptions = await this.assertPermission(
-      user,
-      Object.assign({}, copilot, { docId: maybeDocId })
-    );
+    await this.ac
+      .user(user.id)
+      .workspace(copilot.workspaceId)
+      .allowLocal()
+      .assert('Workspace.Copilot');
 
     const sessions = await this.chatSession.listSessions(
-      Object.assign({}, options, appendOptions)
+      Object.assign({}, options, {
+        userId: user.id,
+        workspaceId: copilot.workspaceId,
+        docId,
+      })
     );
-    if (appendOptions.docId) {
-      type Session = Omit<ChatSessionState, 'messages'> & { docId: string };
-      const filtered = sessions.filter((s): s is Session => !!s.docId);
-      const accessible = await this.ac
-        .user(user.id)
-        .workspace(copilot.workspaceId)
-        .docs(filtered, 'Doc.Update');
-      return accessible.map(this.transformToSessionType);
-    } else {
-      return sessions.map(this.transformToSessionType);
-    }
+
+    return sessions.map(this.transformToSessionType);
   }
 
   @ResolveField(() => [CopilotHistoriesType], {})
@@ -463,8 +437,18 @@ export class CopilotResolver {
     const workspaceId = copilot.workspaceId;
     if (!workspaceId) {
       return [];
+    } else if (docId) {
+      await this.ac
+        .user(user.id)
+        .doc({ workspaceId, docId })
+        .allowLocal()
+        .assert('Doc.Read');
     } else {
-      await this.assertPermission(user, { workspaceId, docId });
+      await this.ac
+        .user(user.id)
+        .workspace(workspaceId)
+        .allowLocal()
+        .assert('Workspace.Copilot');
     }
 
     const histories = await this.chatSession.listHistories(
@@ -490,7 +474,19 @@ export class CopilotResolver {
     options: CreateChatSessionInput
   ): Promise<string> {
     // permission check based on session type
-    await this.assertPermission(user, options);
+    if (options.docId) {
+      await this.ac
+        .user(user.id)
+        .doc({ workspaceId: options.workspaceId, docId: options.docId })
+        .allowLocal()
+        .assert('Doc.Update');
+    } else {
+      await this.ac
+        .user(user.id)
+        .workspace(options.workspaceId)
+        .allowLocal()
+        .assert('Workspace.Copilot');
+    }
 
     const lockFlag = `${COPILOT_LOCKER}:session:${user.id}:${options.workspaceId}`;
     await using lock = await this.mutex.acquire(lockFlag);
@@ -521,15 +517,20 @@ export class CopilotResolver {
     if (!session) {
       throw new CopilotSessionNotFound();
     }
-
-    const config = await this.assertPermission(user, session.config);
-    const { workspaceId, docId: currentDocId } = config;
-    const { docId: newDocId } = options;
-    // check permission if the docId is changed
-    if (newDocId !== undefined && newDocId !== currentDocId) {
-      await this.assertPermission(user, { workspaceId, docId: newDocId });
+    const { workspaceId, docId } = session.config;
+    if (docId) {
+      await this.ac
+        .user(user.id)
+        .doc(workspaceId, docId)
+        .allowLocal()
+        .assert('Doc.Update');
+    } else {
+      await this.ac
+        .user(user.id)
+        .workspace(workspaceId)
+        .allowLocal()
+        .assert('Workspace.Copilot');
     }
-
     const lockFlag = `${COPILOT_LOCKER}:session:${user.id}:${workspaceId}`;
     await using lock = await this.mutex.acquire(lockFlag);
     if (!lock) {
@@ -537,7 +538,7 @@ export class CopilotResolver {
     }
 
     await this.chatSession.checkQuota(user.id);
-    return await this.chatSession.update({
+    return await this.chatSession.updateSession({
       ...options,
       userId: user.id,
     });
@@ -686,8 +687,8 @@ class CreateCopilotPromptInput {
   @Field(() => String)
   name!: string;
 
-  @Field(() => String)
-  model!: string;
+  @Field(() => AvailableModels)
+  model!: AvailableModels;
 
   @Field(() => String, { nullable: true })
   action!: string | null;

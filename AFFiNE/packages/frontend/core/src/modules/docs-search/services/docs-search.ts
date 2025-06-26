@@ -112,7 +112,6 @@ export class DocsSearchService extends Service {
               },
             ],
           },
-          prefer: 'remote',
         }
       )
       .pipe(

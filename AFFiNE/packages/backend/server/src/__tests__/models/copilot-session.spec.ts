@@ -6,7 +6,7 @@ import ava, { ExecutionContext, TestFn } from 'ava';
 import { CopilotPromptInvalid, CopilotSessionInvalidInput } from '../../base';
 import {
   CopilotSessionModel,
-  UpdateChatSessionOptions,
+  UpdateChatSessionData,
   UserModel,
   WorkspaceModel,
 } from '../../models';
@@ -47,20 +47,13 @@ test.after(async t => {
   await t.context.module.close();
 });
 
-// Test data constants
-const TEST_PROMPTS = {
-  NORMAL: 'test-prompt',
-  ACTION: 'action-prompt',
-} as const;
-
-// Helper functions
 const createTestPrompts = async (
   copilotSession: CopilotSessionModel,
   db: PrismaClient
 ) => {
-  await copilotSession.createPrompt(TEST_PROMPTS.NORMAL, 'gpt-4.1');
+  await copilotSession.createPrompt('test-prompt', 'gpt-4.1');
   await db.aiPrompt.create({
-    data: { name: TEST_PROMPTS.ACTION, model: 'gpt-4.1', action: 'edit' },
+    data: { name: 'action-prompt', model: 'gpt-4.1', action: 'edit' },
   });
 };
 
@@ -82,7 +75,7 @@ const createTestSession = async (
     workspaceId: workspace.id,
     docId: null,
     pinned: false,
-    promptName: TEST_PROMPTS.NORMAL,
+    promptName: 'test-prompt',
     promptAction: null,
     ...overrides,
   };
@@ -91,61 +84,13 @@ const createTestSession = async (
   return sessionData;
 };
 
-const getSessionStates = async (db: PrismaClient, sessionIds: string[]) => {
-  const sessions = await Promise.all(
-    sessionIds.map(id =>
-      db.aiSession.findUnique({
-        where: { id },
-        select: { id: true, pinned: true, docId: true },
-      })
-    )
-  );
-  return sessions;
-};
-
-const addMessagesToSession = async (
-  copilotSession: CopilotSessionModel,
-  sessionId: string,
-  content: string,
-  delayMs: number = 0
-) => {
-  if (delayMs > 0) {
-    await new Promise(resolve => setTimeout(resolve, delayMs));
-  }
-  await copilotSession.updateMessages({
-    sessionId,
-    userId: user.id,
-    prompt: { model: 'gpt-4.1' },
-    messages: [
-      {
-        role: 'user',
-        content,
-        createdAt: new Date(),
-      },
-    ],
+const getSessionState = async (db: PrismaClient, sessionId: string) => {
+  const session = await db.aiSession.findUnique({
+    where: { id: sessionId },
+    select: { id: true, pinned: true, docId: true },
   });
+  return session;
 };
-
-const createSessionWithMessages = async (
-  t: ExecutionContext<Context>,
-  overrides: Parameters<typeof createTestSession>[1] = {},
-  messageContent?: string,
-  delayMs: number = 0
-) => {
-  const sessionData = await createTestSession(t, overrides);
-  if (messageContent) {
-    await addMessagesToSession(
-      t.context.copilotSession,
-      sessionData.sessionId,
-      messageContent,
-      delayMs
-    );
-  }
-  return sessionData;
-};
-
-// Simplified update assertion helpers
-type UpdateData = Omit<UpdateChatSessionOptions, 'userId' | 'sessionId'>;
 
 test('should list and filter session type', async t => {
   const { copilotSession, db } = t.context;
@@ -183,23 +128,12 @@ test('should list and filter session type', async t => {
       docId,
     });
 
-    t.is(
-      docSessions.length,
-      2,
-      'should return exactly 2 doc sessions for the specified docId'
-    );
-
-    t.true(
-      docSessions.every(s => s.docId === docId),
-      'all returned sessions should have the specified docId'
-    );
-
     t.snapshot(
       cleanObject(
-        docSessions.toSorted((a, b) =>
-          a.promptName.localeCompare(b.promptName)
+        docSessions.toSorted(s =>
+          s.docId!.localeCompare(s.docId!, undefined, { numeric: true })
         ),
-        ['id', 'userId', 'workspaceId', 'createdAt', 'updatedAt', 'tokenCost']
+        ['id', 'userId', 'workspaceId', 'createdAt', 'tokenCost']
       ),
       'doc sessions should only include sessions with matching docId'
     );
@@ -224,58 +158,56 @@ test('should list and filter session type', async t => {
   }
 });
 
-test('should validate session prompt compatibility', async t => {
+test('should check session validation for prompts', async t => {
   const { copilotSession, db } = t.context;
+
   await createTestPrompts(copilotSession, db);
 
+  const docId = randomUUID();
   const sessionTypes = [
     { name: 'workspace', session: { docId: null, pinned: false } },
     { name: 'pinned', session: { docId: null, pinned: true } },
-    { name: 'doc', session: { docId: randomUUID(), pinned: false } },
+    { name: 'doc', session: { docId, pinned: false } },
   ];
 
-  const result = sessionTypes.flatMap(({ name, session }) => [
-    // non-action prompts should work for all session types
-    {
-      sessionType: name,
-      promptType: 'non-action',
-      shouldThrow: false,
-      result: (() => {
-        try {
-          copilotSession.checkSessionPrompt(session, {
-            name: TEST_PROMPTS.NORMAL,
-            action: undefined,
-          });
-          return 'success';
-        } catch (error) {
-          return error instanceof CopilotPromptInvalid
-            ? 'CopilotPromptInvalid'
-            : 'unknown';
-        }
-      })(),
-    },
-    // action prompts should only work for doc session type
-    {
-      sessionType: name,
-      promptType: 'action',
-      shouldThrow: name !== 'doc',
-      result: (() => {
-        try {
-          copilotSession.checkSessionPrompt(session, {
-            name: TEST_PROMPTS.ACTION,
-            action: 'edit',
-          });
-          return 'success';
-        } catch (error) {
-          return error instanceof CopilotPromptInvalid
-            ? 'CopilotPromptInvalid'
-            : 'unknown';
-        }
-      })(),
-    },
-  ]);
+  // non-action prompts should work for all session types
+  sessionTypes.forEach(({ name, session }) => {
+    t.notThrows(
+      () =>
+        copilotSession.checkSessionPrompt(session, 'test-prompt', undefined),
+      `${name} session should allow non-action prompts`
+    );
+  });
 
-  t.snapshot(result, 'session prompt validation results');
+  // action prompts should only work for doc session type
+  {
+    const actionPromptTests = [
+      {
+        name: 'workspace',
+        session: sessionTypes[0].session,
+        shouldThrow: true,
+      },
+      { name: 'pinned', session: sessionTypes[1].session, shouldThrow: true },
+      { name: 'doc', session: sessionTypes[2].session, shouldThrow: false },
+    ];
+
+    actionPromptTests.forEach(({ name, session, shouldThrow }) => {
+      if (shouldThrow) {
+        t.throws(
+          () =>
+            copilotSession.checkSessionPrompt(session, 'action-prompt', 'edit'),
+          { instanceOf: CopilotPromptInvalid },
+          `${name} session should reject action prompts`
+        );
+      } else {
+        t.notThrows(
+          () =>
+            copilotSession.checkSessionPrompt(session, 'action-prompt', 'edit'),
+          `${name} session should allow action prompts`
+        );
+      }
+    });
+  }
 });
 
 test('should pin and unpin sessions', async t => {
@@ -314,9 +246,9 @@ test('should pin and unpin sessions', async t => {
       pinned: true,
     });
 
-    const sessionStatesAfterSecondPin = await getSessionStates(db, [
-      firstSessionId,
-      secondSessionId,
+    const sessionStatesAfterSecondPin = await Promise.all([
+      getSessionState(db, firstSessionId),
+      getSessionState(db, secondSessionId),
     ]);
 
     t.snapshot(
@@ -357,553 +289,173 @@ test('should pin and unpin sessions', async t => {
   }
 });
 
-test('should handle session updates and type conversions', async t => {
+test('should handle session updates and validations', async t => {
   const { copilotSession, db } = t.context;
   await createTestPrompts(copilotSession, db);
 
-  const sessionId = randomUUID();
-  const actionSessionId = randomUUID();
-  const forkedSessionId = randomUUID();
-  const parentSessionId = randomUUID();
-  const docId = randomUUID();
+  const sessionId = 'session-update-id';
+  const actionSessionId = 'action-session-id';
+  const parentSessionId = 'parent-session-id';
+  const forkedSessionId = 'forked-session-id';
+  const docId = 'doc-update-id';
 
-  {
-    await createTestSession(t, { sessionId });
-    await createTestSession(t, {
-      sessionId: actionSessionId,
-      promptName: TEST_PROMPTS.ACTION,
-      promptAction: 'edit',
-      docId,
-    });
-    await createTestSession(t, { sessionId: parentSessionId, docId });
-    await db.aiSession.create({
-      data: {
-        id: forkedSessionId,
-        workspaceId: workspace.id,
-        userId: user.id,
-        docId,
-        pinned: false,
-        promptName: TEST_PROMPTS.NORMAL,
-        promptAction: null,
-        parentSessionId,
-      },
-    });
-  }
-
-  const updateTestCases = [
-    // action sessions should reject all updates
-    {
-      sessionId: actionSessionId,
-      updates: [
-        { docId: 'new-doc', expected: 'reject' },
-        { pinned: true, expected: 'reject' },
-        { promptName: TEST_PROMPTS.NORMAL, expected: 'reject' },
-      ],
-    },
-    // forked sessions should reject docId updates but allow others
-    {
-      sessionId: forkedSessionId,
-      updates: [
-        { pinned: true, expected: 'allow' },
-        { promptName: TEST_PROMPTS.NORMAL, expected: 'allow' },
-        { docId: 'new-doc', expected: 'reject' },
-      ],
-    },
-    // Regular sessions - prompt validation
-    {
-      sessionId,
-      updates: [
-        { promptName: TEST_PROMPTS.NORMAL, expected: 'allow' },
-        { promptName: TEST_PROMPTS.ACTION, expected: 'reject' },
-        { promptName: 'non-existent-prompt', expected: 'reject' },
-      ],
-    },
-  ];
-
-  const updateResults = [];
-  for (const { sessionId: testSessionId, updates } of updateTestCases) {
-    for (const update of updates) {
-      const { expected: _, ...updateData } = update;
-      try {
-        await t.context.copilotSession.update({
-          ...updateData,
-          userId: user.id,
-          sessionId: testSessionId,
-        });
-        updateResults.push({
-          sessionType:
-            testSessionId === actionSessionId
-              ? 'action'
-              : testSessionId === forkedSessionId
-                ? 'forked'
-                : 'regular',
-          update: updateData,
-          result: 'success',
-        });
-      } catch (error) {
-        updateResults.push({
-          sessionType:
-            testSessionId === actionSessionId
-              ? 'action'
-              : testSessionId === forkedSessionId
-                ? 'forked'
-                : 'regular',
-          update: updateData,
-          result:
-            error instanceof CopilotSessionInvalidInput ? 'rejected' : 'error',
-        });
-      }
-    }
-  }
-
-  t.snapshot(updateResults, 'session update validation results');
-
-  // session type conversions
-  const existingPinnedId = randomUUID();
-  await createTestSession(t, { sessionId: existingPinnedId, pinned: true });
-
-  await copilotSession.update({ userId: user.id, sessionId, pinned: true });
-
-  // pinning behavior
-  const states = await getSessionStates(db, [sessionId, existingPinnedId]);
-  const pinnedCount = states.filter(s => s?.pinned).length;
-  const unpinnedCount = states.filter(s => s && !s.pinned).length;
-
-  t.snapshot(
-    {
-      totalSessions: states.length,
-      pinnedSessions: pinnedCount,
-      unpinnedSessions: unpinnedCount,
-      onlyOneSessionPinned: pinnedCount === 1,
-    },
-    'pinning behavior - should unpin existing when pinning new'
-  );
-
-  // type conversions
-  const conversionSteps = [];
-  const conversions: Array<[string, UpdateData]> = [
-    ['workspace_to_doc', { docId, pinned: false }],
-    ['doc_to_workspace', { docId: null }],
-    ['workspace_to_pinned', { pinned: true }],
-  ];
-
-  for (const [step, data] of conversions) {
-    await copilotSession.update({ userId: user.id, sessionId, ...data });
-    const session = await db.aiSession.findUnique({
-      where: { id: sessionId },
-      select: { docId: true, pinned: true },
-    });
-    conversionSteps.push({
-      step,
-      sessionState: {
-        hasDocId: !!session?.docId,
-        pinned: !!session?.pinned,
-      },
-      type: copilotSession.getSessionType(session!),
-    });
-  }
-
-  t.snapshot(conversionSteps, 'session type conversion steps');
-});
-
-test('should handle session queries, ordering, and filtering', async t => {
-  const { copilotSession, db } = t.context;
-  await createTestPrompts(copilotSession, db);
-
-  const docId = randomUUID();
-  const sessionIds: string[] = [];
-  const sessionConfigs = [
-    { type: 'workspace', config: { docId: null, pinned: false } },
-    { type: 'pinned', config: { docId: null, pinned: true } },
-    { type: 'doc', config: { docId, pinned: false }, withMessages: true },
-    {
-      type: 'action',
-      config: { docId, promptName: TEST_PROMPTS.ACTION, promptAction: 'edit' },
-    },
-  ];
-
-  // create sessions with timing delays for ordering tests
-  for (let i = 0; i < sessionConfigs.length; i++) {
-    const { config, withMessages } = sessionConfigs[i];
-    const sessionId = randomUUID();
-    sessionIds.push(sessionId);
-
-    if (withMessages) {
-      await createSessionWithMessages(
-        t,
-        { sessionId, ...config },
-        `Message for session ${i}`,
-        100 * i
-      );
-    } else {
-      await createTestSession(t, { sessionId, ...config });
-    }
-  }
-
-  // Create additional doc sessions for multiple doc test
-  for (let i = 0; i < 2; i++) {
-    const sessionId = randomUUID();
-    sessionIds.push(sessionId);
-    await createSessionWithMessages(
-      t,
-      { sessionId, docId },
-      `Additional doc message ${i}`,
-      200 + 100 * i
-    );
-  }
-
-  // create fork session
-  const parentSessionId = sessionIds[2]; // use first doc session as parent
-  const forkedSessionId = randomUUID();
+  await createTestSession(t, { sessionId });
+  await createTestSession(t, {
+    sessionId: actionSessionId,
+    promptName: 'action-prompt',
+    promptAction: 'edit',
+    docId: 'some-doc',
+  });
+  await createTestSession(t, {
+    sessionId: parentSessionId,
+    docId: 'parent-doc',
+  });
   await db.aiSession.create({
     data: {
       id: forkedSessionId,
       workspaceId: workspace.id,
       userId: user.id,
-      docId,
+      docId: 'forked-doc',
       pinned: false,
-      promptName: TEST_PROMPTS.NORMAL,
+      promptName: 'test-prompt',
       promptAction: null,
-      parentSessionId,
+      parentSessionId: parentSessionId,
     },
   });
 
-  const baseParams = { userId: user.id, workspaceId: workspace.id };
-  const docParams = { ...baseParams, docId };
-  const queryTestCases = [
-    { name: 'all_workspace_sessions', params: baseParams },
-    {
-      name: 'doc_sessions_with_messages',
-      params: { ...docParams, withMessages: true },
-    },
-    {
-      name: 'recent_top3_sessions',
-      params: { ...baseParams, limit: 3, sessionOrder: 'desc' as const },
-    },
-    {
-      name: 'non_action_sessions',
-      params: { ...docParams, action: false },
-    },
-    { name: 'non_fork_sessions', params: { ...docParams, fork: false } },
-    {
-      name: 'latest_valid_session',
-      params: {
-        ...docParams,
-        limit: 1,
-        sessionOrder: 'desc' as const,
-        action: false,
-        fork: false,
-      },
-    },
-  ];
-
-  const queryResults: Record<string, any> = {};
-  for (const { name, params } of queryTestCases) {
-    const sessions = await copilotSession.list(params);
-    queryResults[name] = {
-      count: sessions.length,
-      sessionTypes: sessions.map(s => ({
-        type: copilotSession.getSessionType(s),
-        hasMessages: !!s.messages?.length,
-        messageCount: s.messages?.length || 0,
-        isFork: !!s.parentSessionId,
-      })),
-    };
-  }
-
-  t.snapshot(queryResults, 'comprehensive session query results');
-
-  // should list sessions appear in correct order
-  {
-    const docSessionsWithMessages = await copilotSession.list({
-      userId: user.id,
-      workspaceId: workspace.id,
-      docId,
-      withMessages: true,
-      sessionOrder: 'desc',
-    });
-
-    // check sessions are returned in desc order by updatedAt
-    if (docSessionsWithMessages.length > 1) {
-      for (let i = 1; i < docSessionsWithMessages.length; i++) {
-        const currentSession = docSessionsWithMessages[i - 1];
-        const nextSession = docSessionsWithMessages[i];
-        t.true(
-          currentSession.updatedAt >= nextSession.updatedAt,
-          `sessions should be ordered by updatedAt desc: ${currentSession.updatedAt} >= ${nextSession.updatedAt}`
-        );
-      }
-    }
-  }
-
-  // should update `updatedAt` when updating messages
-  {
-    const oldestDocSession = await copilotSession.list({
-      userId: user.id,
-      workspaceId: workspace.id,
-      docId,
-      sessionOrder: 'asc',
-      limit: 1,
-    });
-
-    if (oldestDocSession.length > 0) {
-      const sessionId = oldestDocSession[0].id;
-
-      // get initial updatedAt
-      const sessionBeforeUpdate = await db.aiSession.findUnique({
-        where: { id: sessionId },
-        select: { updatedAt: true },
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-      await addMessagesToSession(
-        copilotSession,
-        sessionId,
-        'Update to verify sorting'
-      );
-
-      const sessionAfterUpdate = await db.aiSession.findUnique({
-        where: { id: sessionId },
-        select: { updatedAt: true },
-      });
-      t.true(
-        sessionAfterUpdate!.updatedAt > sessionBeforeUpdate!.updatedAt,
-        'updatedAt should be updated after adding messages'
-      );
-
-      // the updated session now should appears first in desc order
-      const sessionsAfterUpdate = await copilotSession.list({
-        userId: user.id,
-        workspaceId: workspace.id,
-        docId,
-        sessionOrder: 'desc',
-      });
-      t.is(
-        sessionsAfterUpdate[0].id,
-        sessionId,
-        'session with updated messages should appear first in descending order'
-      );
-    }
-  }
-
-  // should get latest valid session
-  {
-    const latestValidSessions = await copilotSession.list({
-      userId: user.id,
-      workspaceId: workspace.id,
-      docId,
-      limit: 1,
-      sessionOrder: 'desc',
-      action: false,
-      fork: false,
-    });
-
-    if (latestValidSessions.length > 0) {
-      const latestSession = latestValidSessions[0];
-
-      // verify this is indeed a non-action, non-fork session
-      t.falsy(
-        latestSession.parentSessionId,
-        'latest session should not be a fork'
-      );
-      t.not(
-        latestSession.promptName,
-        TEST_PROMPTS.ACTION,
-        'latest session should not use action prompt'
-      );
-
-      // verify it's the most recently updated among valid sessions
-      const allValidSessions = await copilotSession.list({
-        userId: user.id,
-        workspaceId: workspace.id,
-        docId,
-        action: false,
-        fork: false,
-        sessionOrder: 'desc',
-      });
-
-      if (allValidSessions.length > 0) {
-        t.is(
-          allValidSessions[0].id,
-          latestSession.id,
-          'latest valid session should be the first in the ordered list'
-        );
-      }
-    }
-  }
-
-  // session type identification
-  const sessionTypeTests = [
-    { docId: null, pinned: false },
-    { docId: undefined, pinned: false },
-    { docId: null, pinned: true },
-    { docId: 'test-doc-id', pinned: false },
-  ];
-
-  const sessionTypeResults = sessionTypeTests.map(session => ({
-    session,
-    type: copilotSession.getSessionType(session),
-  }));
-
-  t.snapshot(sessionTypeResults, 'session type identification results');
-});
-
-test('should handle fork and session attachment operations', async t => {
-  const { copilotSession } = t.context;
-  await createTestPrompts(copilotSession, t.context.db);
-
-  const parentSessionId = randomUUID();
-  const docId = randomUUID();
-
-  await createSessionWithMessages(
-    t,
-    { sessionId: parentSessionId, docId },
-    'Original message'
-  );
-
-  const forkTestCases = [
-    {
-      sessionId: randomUUID(),
-      docId: null,
-      pinned: false,
-      description: 'workspace fork',
-    },
-    { sessionId: randomUUID(), docId, pinned: false, description: 'doc fork' },
-    {
-      sessionId: randomUUID(),
-      docId: null,
-      pinned: true,
-      description: 'pinned fork',
-    },
-  ];
-
-  // test unpinning behavior
-  const existingPinnedId = randomUUID();
-  await createTestSession(t, { sessionId: existingPinnedId, pinned: true });
-
-  const performForkOperation = async (
-    copilotSession: CopilotSessionModel,
-    parentSessionId: string,
-    forkConfig: {
-      sessionId: string;
-      docId: string | null;
-      pinned: boolean;
-    }
+  const assertUpdateThrows = async (
+    t: ExecutionContext<Context>,
+    sessionId: string,
+    updateData: UpdateChatSessionData,
+    message: string
   ) => {
-    return await copilotSession.fork({
-      sessionId: forkConfig.sessionId,
-      userId: user.id,
-      workspaceId: workspace.id,
-      docId: forkConfig.docId,
-      pinned: forkConfig.pinned,
-      parentSessionId,
-      prompt: { name: TEST_PROMPTS.NORMAL, action: null, model: 'gpt-4.1' },
-      messages: [
-        {
-          role: 'user',
-          content: 'Original message',
-          createdAt: new Date(),
-        },
-      ],
-    });
+    await t.throwsAsync(
+      t.context.copilotSession.update(user.id, sessionId, updateData),
+      { instanceOf: CopilotSessionInvalidInput },
+      message
+    );
   };
 
-  // fork operations
-  const forkResults = await Promise.all(
-    forkTestCases.map(async test => {
-      const returnedId = await performForkOperation(
-        copilotSession,
-        parentSessionId,
-        test
+  const assertUpdate = async (
+    t: ExecutionContext<Context>,
+    sessionId: string,
+    updateData: UpdateChatSessionData,
+    message: string
+  ) => {
+    await t.notThrowsAsync(
+      t.context.copilotSession.update(user.id, sessionId, updateData),
+      message
+    );
+  };
+
+  // case 1: action sessions should reject all updates
+  {
+    const actionUpdates = [
+      { docId: 'new-doc' },
+      { pinned: true },
+      { promptName: 'test-prompt' },
+    ];
+    for (const data of actionUpdates) {
+      await assertUpdateThrows(
+        t,
+        actionSessionId,
+        data,
+        `action session should reject update: ${JSON.stringify(data)}`
       );
-      const forkedSession = await copilotSession.get(test.sessionId);
-      return {
-        description: test.description,
-        success: returnedId === test.sessionId,
-        actualState: forkedSession
-          ? {
-              hasDocId: !!forkedSession.docId,
-              isDocIdCorrect: forkedSession.docId === test.docId,
-              pinned: forkedSession.pinned,
-              hasParent: !!forkedSession.parentSessionId,
-            }
-          : null,
-      };
-    })
-  );
+    }
+  }
 
-  // check if pinned fork unpinned existing session
-  const originalPinned = await copilotSession.get(existingPinnedId);
+  // case 2: forked sessions should reject docId updates but allow others
+  {
+    await assertUpdate(
+      t,
+      forkedSessionId,
+      { pinned: true },
+      'forked session should allow pinned update'
+    );
+    await assertUpdate(
+      t,
+      forkedSessionId,
+      { promptName: 'test-prompt' },
+      'forked session should allow promptName update'
+    );
+    await assertUpdateThrows(
+      t,
+      forkedSessionId,
+      { docId: 'new-doc' },
+      'forked session should reject docId update'
+    );
+  }
 
-  t.snapshot(
-    {
-      forkResults,
-      existingPinnedSessionUnpinned: !originalPinned?.pinned,
-    },
-    'fork operation results'
-  );
+  {
+    // case 3: prompt update validation
+    await assertUpdate(
+      t,
+      sessionId,
+      { promptName: 'test-prompt' },
+      'should allow valid non-action prompt'
+    );
+    await assertUpdateThrows(
+      t,
+      sessionId,
+      { promptName: 'action-prompt' },
+      'should reject action prompt'
+    );
+    await assertUpdateThrows(
+      t,
+      sessionId,
+      { promptName: 'non-existent-prompt' },
+      'should reject non-existent prompt'
+    );
+  }
 
-  // attach/detach operations
-  const workspaceSessionId = randomUUID();
-  const existingDocSessionId = randomUUID();
-  const attachTestDocId = randomUUID();
+  // cest 4: session type conversions and pinning behavior
+  {
+    const existingPinnedId = 'existing-pinned-session-id';
+    await createTestSession(t, { sessionId: existingPinnedId, pinned: true });
 
-  // sessions for attach/detach test
-  await createTestSession(t, { sessionId: workspaceSessionId, docId: null });
-  await createTestSession(t, {
-    sessionId: existingDocSessionId,
-    docId: attachTestDocId,
-  });
+    // should unpin existing when pinning new session
+    await copilotSession.update(user.id, sessionId, { pinned: true });
 
-  // attach: workspace -> doc
-  await copilotSession.update({
-    userId: user.id,
-    sessionId: workspaceSessionId,
-    docId: attachTestDocId,
-  });
+    const sessionStatesAfterPin = await Promise.all([
+      getSessionState(db, sessionId),
+      getSessionState(db, existingPinnedId),
+    ]);
+    t.snapshot(
+      sessionStatesAfterPin,
+      'should unpin existing when pinning new session'
+    );
+  }
 
-  const docSessionsAfterAttach = await copilotSession.list({
-    userId: user.id,
-    workspaceId: workspace.id,
-    docId: attachTestDocId,
-  });
+  // test type conversions
+  {
+    const conversionSteps: any[] = [];
+    const convertSession = async (
+      step: string,
+      data: UpdateChatSessionData
+    ) => {
+      await copilotSession.update(user.id, sessionId, data);
+      const session = await db.aiSession.findUnique({
+        where: { id: sessionId },
+        select: { docId: true, pinned: true },
+      });
+      conversionSteps.push({
+        step,
+        session,
+        type: copilotSession.getSessionType(session!),
+      });
+    };
 
-  // detach: doc -> workspace
-  await copilotSession.update({
-    userId: user.id,
-    sessionId: workspaceSessionId,
-    docId: null,
-  });
+    const conversions = [
+      ['pinned_to_doc', { docId, pinned: false }],
+      ['doc_to_workspace', { docId: null }],
+      ['workspace_to_pinned', { pinned: true }],
+    ] as const;
 
-  const workspaceSessionsAfterDetach = await copilotSession.list({
-    userId: user.id,
-    workspaceId: workspace.id,
-    docId: null,
-  });
+    for (const [step, data] of conversions) {
+      await convertSession(step, data);
+    }
 
-  const remainingDocSessions = await copilotSession.list({
-    userId: user.id,
-    workspaceId: workspace.id,
-    docId: attachTestDocId,
-  });
-
-  t.snapshot(
-    {
-      attachPhase: {
-        docSessionCount: docSessionsAfterAttach.length,
-        bothSessionsPresent:
-          docSessionsAfterAttach.some(s => s.id === workspaceSessionId) &&
-          docSessionsAfterAttach.some(s => s.id === existingDocSessionId),
-      },
-      detachPhase: {
-        workspaceSessionExists: workspaceSessionsAfterDetach.some(
-          s => s.id === workspaceSessionId && !s.pinned
-        ),
-        originalDocSessionRemains:
-          remainingDocSessions.length === 1 &&
-          remainingDocSessions[0].id === existingDocSessionId,
-      },
-    },
-    'attach and detach operation results'
-  );
+    t.snapshot(conversionSteps, 'session type conversion steps');
+  }
 });

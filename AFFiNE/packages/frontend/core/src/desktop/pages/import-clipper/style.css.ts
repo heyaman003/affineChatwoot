@@ -10,7 +10,6 @@ export const container = style({
   margin: '0 auto',
   color: cssVarV2('text/primary'),
   padding: '16px',
-  height: 'calc(100% - 48px)',
 });
 
 export const authHeader = style({
@@ -48,7 +47,8 @@ export const mainButton = style({
 });
 
 export const workspaceSelector = style({
-  width: '100%',
+  margin: '0 -16px',
+  width: 'calc(100% + 32px)',
   border: `1px solid ${cssVarV2('layer/insideBorder/border')}`,
-  padding: 6,
+  padding: '0 16px',
 });

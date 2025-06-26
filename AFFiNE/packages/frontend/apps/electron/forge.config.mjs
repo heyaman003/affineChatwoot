@@ -127,19 +127,7 @@ const makers = [
             '/usr/share/metainfo/affine.metainfo.xml',
           ],
         ],
-        runtimeVersion: '24.08',
-        modules: [
-          {
-            name: 'zypak',
-            sources: [
-              {
-                type: 'git',
-                url: 'https://github.com/refi64/zypak',
-                tag: 'v2024.01.17',
-              },
-            ],
-          },
-        ],
+        runtimeVersion: '20.08',
         finishArgs: [
           // Wayland/X11 Rendering
           '--socket=wayland',

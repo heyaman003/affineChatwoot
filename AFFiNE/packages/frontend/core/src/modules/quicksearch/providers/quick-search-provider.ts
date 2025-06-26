@@ -8,7 +8,7 @@ export type QuickSearchFunction<S, P> = (
 
 export interface QuickSearchSession<S, P> {
   items$: LiveData<QuickSearchItem<S, P>[]>;
-  error$?: LiveData<any>;
+  isError$?: LiveData<boolean>;
   isLoading$?: LiveData<boolean>;
   loadingProgress$?: LiveData<number>;
   hasMore$?: LiveData<boolean>;

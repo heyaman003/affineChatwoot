@@ -25,11 +25,6 @@ export class QuickSearch extends Entity {
     .flat()
     .map(items => items.flat());
 
-  readonly error$ = this.state$
-    .map(s => s?.sessions.map(session => session.error$) ?? [])
-    .flat()
-    .map(items => items.find(v => !!v) ?? null);
-
   readonly show$ = this.state$.map(s => !!s);
 
   readonly options$ = this.state$.map(s => s?.options);
