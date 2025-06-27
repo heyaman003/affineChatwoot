@@ -5,7 +5,6 @@ import {
 } from '@affine/core/modules/workspace';
 import { useLiveData, useService } from '@toeverything/infra';
 import { useEffect, useLayoutEffect, useState } from 'react';
-import { useTenant } from '../context/tenant-context';
 
 const cache = new Map<string, { imageBitmap: ImageBitmap; key: string }>();
 
@@ -17,7 +16,7 @@ export const WorkspaceAvatar = ({
   ...otherProps
 }: { meta: WorkspaceMetadata } & AvatarProps) => {
   const workspacesService = useService(WorkspacesService);
-  const tenant = useTenant();
+
   const profile = workspacesService.getProfile(meta);
 
   useEffect(() => {
@@ -74,9 +73,6 @@ export const WorkspaceAvatar = ({
       canceled = true;
     };
   }, [meta, workspacesService, avatarKey]);
-  if(!downloadedAvatar?.imageBitmap && tenant?.tenant?.logo) {
-    return <Avatar url={tenant.tenant.logo} {...otherProps} />;
-  }
 
   return <Avatar image={downloadedAvatar?.imageBitmap} {...otherProps} />;
 };

@@ -298,25 +298,6 @@ input {
 [contenteditable]:focus-visible {
   outline: none;
 }
-:root[data-theme='tangerine'] {
-  --affine-primary-color: #fff3e0;
-  --affine-background-primary-color: #f1b65d;
-  --affine-background-secondary-color: #f7d4a0;
-  --affine-text-primary-color: #3c2a1f;
-  --affine-text-secondary-color: #5a3f2b;
-  --affine-text-tertiary-color: #7a5c3b;
-  /* Add more variables as needed */
-}
-
-:root[data-theme='mint'] {
-  --affine-primary-color: #bfecec;
-  --affine-background-primary-color: #95e2cf;
-  --affine-background-secondary-color: #a3e6d5;
-  --affine-text-primary-color: #0b0c0c;
-  --affine-text-secondary-color: #165c5c;
-  --affine-text-tertiary-color: #2ea7a7;
-  /* Add more variables as needed */
-}
 
 /* Math font may not being loaded in Electron */
 math {

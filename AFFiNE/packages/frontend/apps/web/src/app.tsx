@@ -19,7 +19,7 @@ import { Framework, FrameworkRoot, getCurrentStore } from '@toeverything/infra';
 import { OpClient } from '@toeverything/infra/op';
 import { Suspense } from 'react';
 import { RouterProvider } from 'react-router-dom';
-import { TenantProvider } from '@affine/core/components/context/tenant-context';
+
 const cache = createEmotionCache();
 
 let storeManagerClient: StoreManagerClient;
@@ -89,7 +89,6 @@ export function App() {
       <FrameworkRoot framework={frameworkProvider}>
         <CacheProvider value={cache}>
           <I18nProvider>
-            <TenantProvider>
             <AffineContext store={getCurrentStore()}>
               <RouterProvider
                 fallbackElement={<AppContainer fallback />}
@@ -97,7 +96,6 @@ export function App() {
                 future={future}
               />
             </AffineContext>
-            </TenantProvider>
           </I18nProvider>
         </CacheProvider>
       </FrameworkRoot>

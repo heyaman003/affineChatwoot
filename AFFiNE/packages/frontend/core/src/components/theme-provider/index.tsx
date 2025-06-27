@@ -3,23 +3,16 @@ import { useService } from '@toeverything/infra';
 import { ThemeProvider as NextThemeProvider, useTheme } from 'next-themes';
 import type { PropsWithChildren } from 'react';
 import { useEffect } from 'react';
-// import ./index.css;
-import { useTenant } from '../context/tenant-context';
 
-const themes = ['dark', 'light','tangerine', 'mint','dark-mint', 'dark-tangerine'];
+const themes = ['dark', 'light'];
 
 function ThemeObserver() {
-  const { resolvedTheme,setTheme } = useTheme();
+  const { resolvedTheme } = useTheme();
   const service = useService(AppThemeService);
-  const tenant = useTenant();
 
   useEffect(() => {
     service.appTheme.theme$.next(resolvedTheme);
-    if(tenant?.tenant?.theme) {
-      setTheme(tenant.tenant.theme);
-      console.log('Applied theme:', tenant?.tenant?.theme);
-    }
-  }, [resolvedTheme, service.appTheme.theme$,tenant]);
+  }, [resolvedTheme, service.appTheme.theme$]);
 
   return null;
 }
